@@ -4,7 +4,9 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <string.h>
+#include <math.h>
 
+int status = 0; // Status value for the status command
 
 void catchSIGINT(int signo) {
 
@@ -15,13 +17,13 @@ void catchSIGINT(int signo) {
     exit(0);
 }
 
-void status(int stat) {
-    printf("%d\n", stat);
+void printStatus() {
+    printf("exit value %d\n", status);
 }
 
 // Clean up and exit with the given error status.
-void exitShell(int status) {
-    exit(status);
+void exitShell() {
+    exit(0);
 }
 
 void prompt() {
@@ -29,9 +31,88 @@ void prompt() {
 }
 
 // Given a string, go through and replace instances of "$$" with the process ID.
-void expandPids(char* command) {
-   int pid = getpid();
-   // use strtok or substring to look for $$ and sprintf to rewrite?
+char* expandPids(char* command) {
+    int pid = getpid();
+    char* pidString = calloc(7, sizeof(char)); // 6 is max length of a pid on os1
+    int pidDigits = sprintf(pidString, "%d", pid); // number of digits in the pid
+
+    char* readCommand = NULL; // Make a copy of the original command so it doesn't get destroyed
+    readCommand = calloc(strlen(command) + 1, 1);
+    strcpy(readCommand, command);
+    char* expandedCommand = calloc(strlen(readCommand) + 1, 1); // Final expanded command to be returned
+    char* currString = readCommand; // String left to parse
+    char* pidLocation = strstr(readCommand, "$$");
+    if (!pidLocation) {
+        return command;
+    }
+
+    while (pidLocation && currString[0] != '\0') {
+        pidLocation[0] = '\0'; // Terminate the current token for strcat'ing currString
+        pidLocation[1] = '\0'; // Blank out the next $ too
+
+        expandedCommand = realloc(expandedCommand, strlen(expandedCommand) + strlen(currString) + pidDigits + 1);
+        
+        strcat(expandedCommand, currString);
+        strcat(expandedCommand, pidString);
+        
+        currString = pidLocation + 2;
+        pidLocation = strstr(currString, "$$");
+    }
+    if (currString[0] != '\0') {
+        expandedCommand = realloc(expandedCommand, strlen(expandedCommand) + strlen(currString) + 1);
+        strcat(expandedCommand, currString);
+    }
+    
+    return expandedCommand;
+
+    /*
+    char* token = NULL;        // Keep track of current token (section of command
+                               // between dollar signs)
+    char* saveptr;             // Used by strtok_r to keep track of spot
+
+    token = strtok_r(readCommand, "$", &saveptr);
+    if (*saveptr == '\0') {
+        return readCommand;
+    }
+    else if (saveptr[1] == '$') {
+        expandedCommand = calloc(strlen(token) + pidDigits + 1, sizeof(char));
+        sprintf(expandedCommand, "%s%d", token, pid);
+        saveptr++;
+    }
+    else {
+        expandedCommand = calloc(strlen(token) + 2, sizeof(char));
+        sprintf(expandedCommand, "%s\$", token);
+    }
+
+    while (token = strtok_r(NULL, "$", &saveptr) && token) {
+    
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+    token = strtok_r(readCommand, "$", &saveptr);
+    expandedCommand = calloc(strlen(token) + 1, sizeof(char));
+    while (token) { // Returns false when there are no more tokens found
+        realloc(expandedCommand, strlen(token) + 1, sizeof(char));
+        strcat(expandedCommand, token);
+        if (saveptr && saveptr[1] == '$') { // Another $ follows
+            
+        }
+          
+        sprintf(expandedCommand, "%s%s", expandedCommand, )
+    }
+    */
+
+    // use strtok or substring to look for $$ and sprintf to rewrite?
 }
 
 // Look at a command and find out if it needs redirection????? this will be
@@ -46,8 +127,7 @@ int main(int argc, char* argv[]) {
     size_t len = -1;             // Length of line entered by user
     char* currWord = NULL;       // Current word in command entered
     char* saveptr;               // Pointer used by strtok_r() to save its spot
-    
-    int status = 0;              // Status value for the status command
+    char* expandedCommand = NULL;    // Expanded version of current command
 
     while (1) {
         prompt();
@@ -55,8 +135,9 @@ int main(int argc, char* argv[]) {
 
         // Don't do anything if empty line (only '\n' entered) or line starts with '#'
         if (len != 1 && readBuffer[0] != '#') {
-            expandPids(readBuffer);
-            
+            expandedCommand = expandPids(readBuffer);
+            printf("Expanded command: %s\n", expandedCommand); fflush(stdout);
+
             if (strncmp(readBuffer, "exit", 4) == 0) {
                 exitShell(0);
             }
