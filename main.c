@@ -1,10 +1,10 @@
 #include <signal.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <unistd.h>
-#include <sys/types.h>
+#include <stdlib.h>
 #include <string.h>
-#include <math.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 int status = 0; // Status value for the status command
 
@@ -64,55 +64,6 @@ char* expandPids(char* command) {
     }
     
     return expandedCommand;
-
-    /*
-    char* token = NULL;        // Keep track of current token (section of command
-                               // between dollar signs)
-    char* saveptr;             // Used by strtok_r to keep track of spot
-
-    token = strtok_r(readCommand, "$", &saveptr);
-    if (*saveptr == '\0') {
-        return readCommand;
-    }
-    else if (saveptr[1] == '$') {
-        expandedCommand = calloc(strlen(token) + pidDigits + 1, sizeof(char));
-        sprintf(expandedCommand, "%s%d", token, pid);
-        saveptr++;
-    }
-    else {
-        expandedCommand = calloc(strlen(token) + 2, sizeof(char));
-        sprintf(expandedCommand, "%s\$", token);
-    }
-
-    while (token = strtok_r(NULL, "$", &saveptr) && token) {
-    
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-    token = strtok_r(readCommand, "$", &saveptr);
-    expandedCommand = calloc(strlen(token) + 1, sizeof(char));
-    while (token) { // Returns false when there are no more tokens found
-        realloc(expandedCommand, strlen(token) + 1, sizeof(char));
-        strcat(expandedCommand, token);
-        if (saveptr && saveptr[1] == '$') { // Another $ follows
-            
-        }
-          
-        sprintf(expandedCommand, "%s%s", expandedCommand, )
-    }
-    */
-
-    // use strtok or substring to look for $$ and sprintf to rewrite?
 }
 
 // Look at a command and find out if it needs redirection????? this will be
@@ -125,8 +76,6 @@ int findRedirection() {
 int main(int argc, char* argv[]) {
     char* readBuffer = NULL;     // Command entered by user
     size_t len = -1;             // Length of line entered by user
-    char* currWord = NULL;       // Current word in command entered
-    char* saveptr;               // Pointer used by strtok_r() to save its spot
     char* expandedCommand = NULL;    // Expanded version of current command
 
     while (1) {
@@ -136,7 +85,7 @@ int main(int argc, char* argv[]) {
         // Don't do anything if empty line (only '\n' entered) or line starts with '#'
         if (len != 1 && readBuffer[0] != '#') {
             expandedCommand = expandPids(readBuffer);
-            printf("Expanded command: %s\n", expandedCommand); fflush(stdout);
+            // printf("Expanded command: %s\n", expandedCommand); fflush(stdout);
 
             if (strncmp(readBuffer, "exit", 4) == 0) {
                 exitShell(0);
@@ -156,12 +105,12 @@ int main(int argc, char* argv[]) {
                     // Replace the '\n' at the end with a '\0' first
                     strtok(++arg, "\n");
                     error = chdir(arg);
-                    printf("Arg was %s\n", arg);
+                    // printf("Arg was %s\n", arg); fflush(stdout);
                 }
                 if (error) {
                     printf("No such file or directory\n"); fflush(stdout);
                 }
-                // /*
+                /*
                 // Uncomment for testing:
                 char* buf = NULL;
                 buf = getcwd(buf, 0);
@@ -175,52 +124,81 @@ int main(int argc, char* argv[]) {
                 printf("%d\n", status);
             }
             else {
-                expandPids(readBuffer);
-                // get args
-                // expand args
+                expandedCommand = expandPids(readBuffer);
+                char** argPtrs = calloc(514, sizeof(char*));
+                int currArg = 0;
+                char* saveptr; // Pointer used by strtok_r() to save its spot
+                char* args = strtok_r(expandedCommand, " \n", &saveptr);
+                do {
+                    argPtrs[currArg] = args;
+                    // printf("currArg = %d; argPtrs[currArg] = %s\n", currArg, argPtrs[currArg]);
+                    currArg++;
+                    args = strtok_r(NULL, " \n", &saveptr);
+                }
+                while (args);
+                argPtrs[currArg] = NULL;
                 // determine redirection
                 // determine foreground/background
                 // fork
                 // exec on expanded command
                 // exit after the exec!!
-                
-            /*
 
-            pid_t spawnpid = -5;
-            
-            spawnpid = fork();
 
-            switch (spawnpid) {
-                case -1:
+
+                // I referenced lecture 3.1 and Exploration: Process API -
+                // Monitoring Child Processes for this code
+                int fdIn = -1;
+                int fdOut = -1;
+
+
+                ///*
+
+                pid_t childPid = -5;
+                int childExitInfo = -5;
+
+
+                childPid = fork();
+
+                if (childPid == -1) {
                     perror("Unable to fork! ");
-                    exitShell(1);
-                    break;
-                case 0:
-                    // Child
+                    status = 1;
+                }
+                else if (childPid == 0) {
+                    // I am the child universe
+                    // printf("me child\n"); fflush(stdout);
+                    // printf("PATH: %s\n", getenv("PATH"));
+                    execvp(expandedCommand, argPtrs);
+                    perror("execvp ");
+                    exit(2);
+                }
 
-                    exec();
-                    break;
-                default:
-                    // Parent
-                    break;
-            }
-            printf(""); fflush();
+                // I am the parent universe
+                // printf("me parent\n"); fflush(stdout);
+                childPid = waitpid(childPid, &childExitInfo, 0);
 
-            struct sigaction SIGINT_action = {0}, ignore_action = {0};
+                // printf("parent waiting done\n");
 
-            SIGINT_action.sa_handler = catchSIGINT;
-            sigfillset(&SIGINT_action.sa_mask);
-            SIGINT_action.sa_flags = 0;
 
-            ignore_action.sa_handler = SIG_IGN;
 
-            sigaction(SIGINT, &SIGINT_action, NULL);
-            sigaction(SIGTERM, &ignore_action, NULL);
-            sigaction(SIGHUP, &ignore_action, NULL);
-            sigaction(SIGQUIT, &ignore_action, NULL);
 
-            printf("SIGTERM, SIGHUP, and SIGQUIT are disabled.\n"); fflush();
-        */
+
+                // */
+                /*
+                struct sigaction SIGINT_action = {0}, ignore_action = {0};
+
+                SIGINT_action.sa_handler = catchSIGINT;
+                sigfillset(&SIGINT_action.sa_mask);
+                SIGINT_action.sa_flags = 0;
+
+                ignore_action.sa_handler = SIG_IGN;
+
+                sigaction(SIGINT, &SIGINT_action, NULL);
+                sigaction(SIGTERM, &ignore_action, NULL);
+                sigaction(SIGHUP, &ignore_action, NULL);
+                sigaction(SIGQUIT, &ignore_action, NULL);
+
+                printf("SIGTERM, SIGHUP, and SIGQUIT are disabled.\n"); fflush();
+                // */
             }
         }
         memset(readBuffer, '\0', strlen(readBuffer) - 1); // Clear the reading buffer
