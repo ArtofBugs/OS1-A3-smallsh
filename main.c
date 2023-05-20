@@ -125,6 +125,7 @@ int main(int argc, char* argv[]) {
             }
             else {
                 expandedCommand = expandPids(readBuffer);
+
                 char** argPtrs = calloc(514, sizeof(char*));
                 int currArg = 0;
                 char* saveptr; // Pointer used by strtok_r() to save its spot
@@ -139,14 +140,13 @@ int main(int argc, char* argv[]) {
                 argPtrs[currArg] = NULL;
                 // determine redirection
                 // determine foreground/background
-                // fork
-                // exec on expanded command
-                // exit after the exec!!
-
-
 
                 // I referenced lecture 3.1 and Exploration: Process API -
                 // Monitoring Child Processes for this code
+
+                int redirectIn = 0; // 1 if input should be redirected
+                int redirectOut = 0; // 1 if output should be redirected
+                int bg = 0; // 1 if command should be executed in background
                 int fdIn = -1;
                 int fdOut = -1;
 
@@ -168,14 +168,16 @@ int main(int argc, char* argv[]) {
                     // printf("me child\n"); fflush(stdout);
                     // printf("PATH: %s\n", getenv("PATH"));
                     execvp(expandedCommand, argPtrs);
-                    perror("execvp ");
-                    exit(2);
+                    perror("execvp() failed: ");
+                    exit(1);
                 }
 
                 // I am the parent universe
-                // printf("me parent\n"); fflush(stdout);
                 childPid = waitpid(childPid, &childExitInfo, 0);
-
+                if (WIFEXITED(childExitInfo)) {
+                    // printf("Child %d exited normally with status %d\n", childPid, WEXITSTATUS(childExitInfo)); fflush(stdout);
+                    status = WEXITSTATUS(childExitInfo);
+                }
                 // printf("parent waiting done\n");
 
 
