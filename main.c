@@ -19,15 +19,12 @@ void catchSIGINT(int signo) {
     exit(0);
 }
 
-void printStatus() {
-    printf("exit value %d\n", status);
-}
-
 // Clean up and exit with the given error status.
 void exitShell() {
     exit(0);
 }
 
+// Print the ":" prompt.
 void prompt() {
     printf(": "); fflush(stdout);
 }
@@ -78,7 +75,7 @@ int main(int argc, char* argv[]) {
         getline(&readBuffer, &len, stdin);
 
         // Don't do anything if empty line (only '\n' entered) or line starts with '#'
-        if (len != 1 && readBuffer[0] != '#') {
+        if (strlen(readBuffer) != 1 && readBuffer[0] != '#') {
             expandedCommand = expandPids(readBuffer);
             // printf("Expanded command: %s\n", expandedCommand); fflush(stdout);
 
@@ -116,9 +113,47 @@ int main(int argc, char* argv[]) {
                 // */
             }
             else if (strncmp(readBuffer, "status", 6) == 0) {
-                printf("%d\n", status);
+                if (status == 0 || status == 1) {
+                    printf("exit value %d\n", status);
+                }
+                else {
+                    printf("terminated by signal %d\n", status);
+                }
             }
             else {
+                expandedCommand = expandPids(readBuffer);
+
+                int bg = 0; // 1 if command should be executed in background
+                int fdIn = 0; // File descriptor to direct input to
+                int fdOut = 1; // File descriptor to direct output to
+
+
+                // Put arguments into an array for exec() =====================
+
+                char** argPtrs = calloc(514, sizeof(char*));
+                int currArg = 0;
+                char* saveptr; // Pointer used by strtok_r() to save its spot
+                char* args = strtok_r(expandedCommand, " \n", &saveptr);
+                do {
+                    argPtrs[currArg] = args;
+                    // printf("currArg = %d; argPtrs[currArg] = %s\n", currArg, argPtrs[currArg]);
+                    currArg++;
+                    args = strtok_r(NULL, " \n", &saveptr);
+                }
+                while (args);
+                argPtrs[currArg] = NULL;
+
+
+                // Determine whether backgrounding needs to happen ============
+
+                if (strcmp(argPtrs[currArg - 1], "&") == 0) {
+                    bg = 1;
+                    argPtrs[currArg - 1] = NULL; // Terminate args here for exec()
+                    currArg--;
+                }
+
+                // Create child ===============================================
+
                 // I referenced lecture 3.1 and Exploration: Process API -
                 // Monitoring Child Processes for this code
 
@@ -134,35 +169,6 @@ int main(int argc, char* argv[]) {
                 }
                 else if (childPid == 0) {
                     // Child
-                    expandedCommand = expandPids(readBuffer);
-
-                    int bg = 0; // 1 if command should be executed in background
-                    int fdIn = 0; // File descriptor to direct input to
-                    int fdOut = 1; // File descriptor to direct output to
-
-
-                    // Put arguments into an array for exec() =====================
-                    
-                    char** argPtrs = calloc(514, sizeof(char*));
-                    int currArg = 0;
-                    char* saveptr; // Pointer used by strtok_r() to save its spot
-                    char* args = strtok_r(expandedCommand, " \n", &saveptr);
-                    do {
-                        argPtrs[currArg] = args;
-                        // printf("currArg = %d; argPtrs[currArg] = %s\n", currArg, argPtrs[currArg]);
-                        currArg++;
-                        args = strtok_r(NULL, " \n", &saveptr);
-                    }
-                    while (args);
-                    argPtrs[currArg] = NULL;
-
-                    // Determine whether backgrounding needs to happen ============
-
-                    if (strcmp(argPtrs[currArg - 1], "&") == 0) {
-                        bg = 1;
-                        argPtrs[currArg - 1] = NULL; // Terminate args here for exec()
-                        currArg--;
-                    }
 
                     
                     // Determine whether input/output need to be redirected =======
@@ -217,13 +223,13 @@ int main(int argc, char* argv[]) {
                             fcntl(fdOut, F_SETFD, FD_CLOEXEC);
                         }
                     }
-                    dup2(fdIn, 0);
-                    dup2(fdOut, 1);
                     if (bg == 1) {
-                        printf("%d", getpid()); // Print own pid
+                        printf("%d\n", getpid()); fflush(stdout); // Print own pid
                         // Add self to array of children to watch
                         // ??
                     }
+                    dup2(fdIn, 0);
+                    dup2(fdOut, 1);
                     execvp(expandedCommand, argPtrs);
                     // Error out if it gets down here
                     perror("bash"); fflush(stdout);
@@ -261,7 +267,9 @@ int main(int argc, char* argv[]) {
                 // */
             }
         }
-        memset(readBuffer, '\0', strlen(readBuffer) - 1); // Clear the reading buffer
+        free(readBuffer);
+        readBuffer = NULL;
+        len = -1;
     }
     return 1;  // If it got down here, there was a problem...
 }
