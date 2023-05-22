@@ -1,7 +1,9 @@
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -62,15 +64,8 @@ char* expandPids(char* command) {
         expandedCommand = realloc(expandedCommand, strlen(expandedCommand) + strlen(currString) + 1);
         strcat(expandedCommand, currString);
     }
-    
+    free(readCommand);
     return expandedCommand;
-}
-
-// Look at a command and find out if it needs redirection????? this will be
-// after all the other args except for the arg for where to redirect to, ALSO running in the background is also at the very
-// very very end!!!
-int findRedirection() {
-    return 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -95,7 +90,7 @@ int main(int argc, char* argv[]) {
                 char* arg = readBuffer + 2; // pointer to spot after "cd", which
                                             // is ' ' if arguments
                                             // were provided and '\n' if not
-                
+
                 if (arg[0] == '\n') { // No arguments provided
                     // Go to home directory
                     error = chdir(getenv("HOME"));
@@ -108,7 +103,7 @@ int main(int argc, char* argv[]) {
                     // printf("Arg was %s\n", arg); fflush(stdout);
                 }
                 if (error) {
-                    printf("No such file or directory\n"); fflush(stdout);
+                    perror(NULL); fflush(stdout);
                 }
                 /*
                 // Uncomment for testing:
@@ -124,34 +119,8 @@ int main(int argc, char* argv[]) {
                 printf("%d\n", status);
             }
             else {
-                expandedCommand = expandPids(readBuffer);
-
-                char** argPtrs = calloc(514, sizeof(char*));
-                int currArg = 0;
-                char* saveptr; // Pointer used by strtok_r() to save its spot
-                char* args = strtok_r(expandedCommand, " \n", &saveptr);
-                do {
-                    argPtrs[currArg] = args;
-                    // printf("currArg = %d; argPtrs[currArg] = %s\n", currArg, argPtrs[currArg]);
-                    currArg++;
-                    args = strtok_r(NULL, " \n", &saveptr);
-                }
-                while (args);
-                argPtrs[currArg] = NULL;
-                // determine redirection
-                // determine foreground/background
-
                 // I referenced lecture 3.1 and Exploration: Process API -
                 // Monitoring Child Processes for this code
-
-                int redirectIn = 0; // 1 if input should be redirected
-                int redirectOut = 0; // 1 if output should be redirected
-                int bg = 0; // 1 if command should be executed in background
-                int fdIn = -1;
-                int fdOut = -1;
-
-
-                ///*
 
                 pid_t childPid = -5;
                 int childExitInfo = -5;
@@ -160,25 +129,114 @@ int main(int argc, char* argv[]) {
                 childPid = fork();
 
                 if (childPid == -1) {
-                    perror("Unable to fork! ");
+                    perror("Unable to fork"); fflush(stdout);
                     status = 1;
                 }
                 else if (childPid == 0) {
-                    // I am the child universe
-                    // printf("me child\n"); fflush(stdout);
-                    // printf("PATH: %s\n", getenv("PATH"));
+                    // Child
+                    expandedCommand = expandPids(readBuffer);
+
+                    int bg = 0; // 1 if command should be executed in background
+                    int fdIn = 0; // File descriptor to direct input to
+                    int fdOut = 1; // File descriptor to direct output to
+
+
+                    // Put arguments into an array for exec() =====================
+                    
+                    char** argPtrs = calloc(514, sizeof(char*));
+                    int currArg = 0;
+                    char* saveptr; // Pointer used by strtok_r() to save its spot
+                    char* args = strtok_r(expandedCommand, " \n", &saveptr);
+                    do {
+                        argPtrs[currArg] = args;
+                        // printf("currArg = %d; argPtrs[currArg] = %s\n", currArg, argPtrs[currArg]);
+                        currArg++;
+                        args = strtok_r(NULL, " \n", &saveptr);
+                    }
+                    while (args);
+                    argPtrs[currArg] = NULL;
+
+                    // Determine whether backgrounding needs to happen ============
+
+                    if (strcmp(argPtrs[currArg - 1], "&") == 0) {
+                        bg = 1;
+                        argPtrs[currArg - 1] = NULL; // Terminate args here for exec()
+                        currArg--;
+                    }
+
+                    
+                    // Determine whether input/output need to be redirected =======
+                    
+                    // Only look at the last four arguments (not including & if it
+                    // was there), because those are the only places possible to
+                    // find < or >. Skip the very last argument, which would be a
+                    // file name if redirection is to happen. Also stop if 0 is
+                    // reached (that's the position of the command itself).
+                    for (int i = currArg - 2; i > 0 && i >= currArg - 4; i--) {
+                        if (strcmp(argPtrs[i], "<") == 0) {
+                            fdIn = open(argPtrs[i+1], O_RDONLY);
+                            if (fdIn == -1) {
+                                perror("bash"); fflush(stdout);
+                                exit(1); // Exit child and report status
+                            }
+                            // From Exploration: Processes and I/O
+                            fcntl(fdIn, F_SETFD, FD_CLOEXEC);
+                            // Now whenever this process or one of its child
+                            // processes calls exec, the file descriptor fd will be
+                            // closed in that process
+                            argPtrs[i] = NULL; // truncate arguments list
+                        }
+                        else if (strcmp(argPtrs[i], ">") == 0) {
+                            fdOut = open(argPtrs[i+1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+                            if (fdOut == -1) {
+                                perror("bash"); fflush(stdout);
+                                exit(1); // Exit child and report status
+                            }
+                            fcntl(fdOut, F_SETFD, FD_CLOEXEC);
+                            argPtrs[i] = NULL; // truncate arguments list
+                        }
+                    }
+
+                    // Redirect input and output to /dev/null if running in
+                    // background without redirection to file
+                    if (bg == 1) {
+                        if (fdIn == 0) {
+                            fdIn = open("/dev/null", O_RDONLY);
+                            if (fdIn == -1) {
+                                perror("bash"); fflush(stdout);
+                                exit(1);
+                            }
+                            fcntl(fdIn, F_SETFD, FD_CLOEXEC);
+                        }
+                        if (fdOut == 1) {
+                            fdOut = open("/dev/null", O_WRONLY);
+                            if (fdOut == -1) {
+                                perror("bash"); fflush(stdout);
+                                exit(1);
+                            }
+                            fcntl(fdOut, F_SETFD, FD_CLOEXEC);
+                        }
+                    }
+                    dup2(fdIn, 0);
+                    dup2(fdOut, 1);
+                    if (bg == 1) {
+                        printf("%d", getpid()); // Print own pid
+                        // Add self to array of children to watch
+                        // ??
+                    }
                     execvp(expandedCommand, argPtrs);
-                    perror("execvp() failed: ");
+                    // Error out if it gets down here
+                    perror("bash"); fflush(stdout);
                     exit(1);
                 }
 
-                // I am the parent universe
+                // Parent
                 childPid = waitpid(childPid, &childExitInfo, 0);
                 if (WIFEXITED(childExitInfo)) {
                     // printf("Child %d exited normally with status %d\n", childPid, WEXITSTATUS(childExitInfo)); fflush(stdout);
                     status = WEXITSTATUS(childExitInfo);
                 }
-                // printf("parent waiting done\n");
+                // printf("Parent waiting done\n");
 
 
 
