@@ -90,9 +90,6 @@ int main(int argc, char* argv[]) {
 
     sigaction(SIGINT, &ignore_action, NULL); // Ignore for parent
     sigaction(SIGTSTP, &SIGTSTP_action, NULL); // Register to function
-    sigaction(SIGTERM, &ignore_action, NULL);
-    sigaction(SIGHUP, &ignore_action, NULL);
-    sigaction(SIGQUIT, &ignore_action, NULL);
 
     while (1) {
         // Check for finished background processes to reap ====================
@@ -131,7 +128,28 @@ int main(int argc, char* argv[]) {
             // printf("Expanded command: %s\n", expandedCommand); fflush(stdout);
 
             if (strncmp(readBuffer, "exit", 4) == 0) {
-
+                for (int i = 0; i <= maxBgProc; i++) {
+                    // If the child process has not terminated, it will be force killed;
+                    // otherwise, will be cleaned up.
+                    if (waitpid(bgProcs[i], &bgProcInfos[i], WNOHANG) == 0) {
+                        kill(bgProcs[i], SIGKILL); // Force kill!
+                        continue;
+                    }
+                    // Print exit/termination status
+                    if (WIFEXITED(bgProcInfos[i])) {
+                        printf("background pid %d is done: ", bgProcs[i]);
+                        printf("exit value %d\n", WEXITSTATUS(bgProcInfos[i])); fflush(stdout);
+                    }
+                    else {
+                        printf("background pid %d is done: ", bgProcs[i]);
+                        printf("terminated by signal %d\n", WTERMSIG(bgProcInfos[i])); fflush(stdout);
+                    }
+                    // Remove this entry from the record of background processes still
+                    // running by replacing it with the very top array item
+                    bgProcs[i] = bgProcs[maxBgProc];
+                    bgProcInfos[i] = bgProcInfos[maxBgProc];
+                    maxBgProc--;
+                }
                 exit(0);
             }
             else if (strncmp(expandedCommand, "cd", 2) == 0) {
