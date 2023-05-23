@@ -13,7 +13,7 @@ int status = 0; // Status value for the status command
 void catchSIGINT(int signo) {
 
     char* message = "^C";
-    write(STDOUT_FILENO, message, 3);
+    write(STDOUT_FILENO, message, 2);
     /*raise(SIGUSR2);
     sleep(5);*/
     exit(0);
@@ -21,6 +21,7 @@ void catchSIGINT(int signo) {
 
 // Clean up and exit with the given error status.
 void exitShell() {
+
     exit(0);
 }
 
@@ -66,11 +67,43 @@ char* expandPids(char* command) {
 }
 
 int main(int argc, char* argv[]) {
-    char* readBuffer = NULL;     // Command entered by user
-    size_t len = -1;             // Length of line entered by user
+    char* readBuffer = NULL;         // Command entered by user
+    size_t len = -1;                 // Length of line entered by user
     char* expandedCommand = NULL;    // Expanded version of current command
 
+    pid_t bgProcs[257];   // Array of background processes still running
+    int bgProcInfos[257]; // Array of exit information integers for the
+                          // background processes
+    int maxBgProc = -1;   // Index of last background process
+
     while (1) {
+        // Check for finished background processes to reap ====================
+
+        for (int i = 0; i <= maxBgProc; i++) {
+            // If the child process has not terminated, waitpid() will return 0;
+            // otherwise, it will clean up that process.
+            if (waitpid(bgProcs[i], &bgProcInfos[i], WNOHANG) == 0) {
+                continue;
+            }
+            // Print exit/termination status
+            if (WIFEXITED(bgProcInfos[i])) {
+                printf("background pid %d is done: ", bgProcs[i]);
+                printf("exit value %d\n", WEXITSTATUS(bgProcInfos[i])); fflush(stdout);
+            }
+            else {
+                printf("background pid %d is done: ", bgProcs[i]);
+                printf("terminated by signal %d\n", WTERMSIG(bgProcInfos[i])); fflush(stdout);
+            }
+            // Remove this entry from the record of background processes still
+            // running by replacing it with the very top array item
+            bgProcs[i] = bgProcs[maxBgProc];
+            bgProcInfos[i] = bgProcInfos[maxBgProc];
+            maxBgProc--;
+        }
+
+
+        // Prompt and interpret input =========================================
+
         prompt();
         getline(&readBuffer, &len, stdin);
 
@@ -82,9 +115,9 @@ int main(int argc, char* argv[]) {
             if (strncmp(readBuffer, "exit", 4) == 0) {
                 exitShell(0);
             }
-            else if (strncmp(readBuffer, "cd", 2) == 0) {
+            else if (strncmp(expandedCommand, "cd", 2) == 0) {
                 int error = 0; // non-zero if chdir was unsuccessful
-                char* arg = readBuffer + 2; // pointer to spot after "cd", which
+                char* arg = expandedCommand + 2; // pointer to spot after "cd", which
                                             // is ' ' if arguments
                                             // were provided and '\n' if not
 
@@ -100,7 +133,7 @@ int main(int argc, char* argv[]) {
                     // printf("Arg was %s\n", arg); fflush(stdout);
                 }
                 if (error) {
-                    perror(NULL); fflush(stdout);
+                    perror("cd"); fflush(stdout);
                 }
                 /*
                 // Uncomment for testing:
@@ -121,8 +154,6 @@ int main(int argc, char* argv[]) {
                 }
             }
             else {
-                expandedCommand = expandPids(readBuffer);
-
                 int bg = 0; // 1 if command should be executed in background
                 int fdIn = 0; // File descriptor to direct input to
                 int fdOut = 1; // File descriptor to direct output to
@@ -171,13 +202,13 @@ int main(int argc, char* argv[]) {
                     // Child
 
                     
-                    // Determine whether input/output need to be redirected =======
+                    // Determine whether input/output need to be redirected ===
                     
-                    // Only look at the last four arguments (not including & if it
-                    // was there), because those are the only places possible to
-                    // find < or >. Skip the very last argument, which would be a
-                    // file name if redirection is to happen. Also stop if 0 is
-                    // reached (that's the position of the command itself).
+                    // Only look at the last four arguments (not including & if
+                    // it was there), because those are the only places possible
+                    // to find < or >. Skip the very last argument, which would
+                    // be a file name if redirection is to happen. Also stop if
+                    // 0 is reached (that's the position of the command itself).
                     for (int i = currArg - 2; i > 0 && i >= currArg - 4; i--) {
                         if (strcmp(argPtrs[i], "<") == 0) {
                             fdIn = open(argPtrs[i+1], O_RDONLY);
@@ -188,12 +219,13 @@ int main(int argc, char* argv[]) {
                             // From Exploration: Processes and I/O
                             fcntl(fdIn, F_SETFD, FD_CLOEXEC);
                             // Now whenever this process or one of its child
-                            // processes calls exec, the file descriptor fd will be
-                            // closed in that process
+                            // processes calls exec, the file descriptor fd will
+                            // be closed in that process
                             argPtrs[i] = NULL; // truncate arguments list
                         }
                         else if (strcmp(argPtrs[i], ">") == 0) {
-                            fdOut = open(argPtrs[i+1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+                            fdOut = open(argPtrs[i+1],
+                                    O_WRONLY | O_CREAT | O_TRUNC, 0640);
                             if (fdOut == -1) {
                                 perror("bash"); fflush(stdout);
                                 exit(1); // Exit child and report status
@@ -223,11 +255,6 @@ int main(int argc, char* argv[]) {
                             fcntl(fdOut, F_SETFD, FD_CLOEXEC);
                         }
                     }
-                    if (bg == 1) {
-                        printf("%d\n", getpid()); fflush(stdout); // Print own pid
-                        // Add self to array of children to watch
-                        // ??
-                    }
                     dup2(fdIn, 0);
                     dup2(fdOut, 1);
                     execvp(expandedCommand, argPtrs);
@@ -237,12 +264,21 @@ int main(int argc, char* argv[]) {
                 }
 
                 // Parent
-                childPid = waitpid(childPid, &childExitInfo, 0);
-                if (WIFEXITED(childExitInfo)) {
-                    // printf("Child %d exited normally with status %d\n", childPid, WEXITSTATUS(childExitInfo)); fflush(stdout);
-                    status = WEXITSTATUS(childExitInfo);
+                if (bg == 0) {
+                    childPid = waitpid(childPid, &childExitInfo, 0);
+                    if (WIFEXITED(childExitInfo)) {
+                        status = WEXITSTATUS(childExitInfo);
+                    }
+                    else {
+                        status = WTERMSIG(childExitInfo);
+                    }
                 }
-                // printf("Parent waiting done\n");
+                else {
+                    maxBgProc++;
+                    waitpid(childPid, &bgProcInfos[maxBgProc], WNOHANG);
+                    printf("background pid is %d\n", childPid); fflush(stdout);
+                    bgProcs[maxBgProc] = childPid;
+                }
 
 
 
