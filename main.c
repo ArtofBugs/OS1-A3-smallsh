@@ -9,8 +9,11 @@
 #include <unistd.h>
 
 int status = 0; // Status value for the status command
-int noBg = 0; // 1 if nothing can be run in the background
+                // - can hold exit status or termination signal number
+int noBg = 0;   // 1 if nothing can be run in the background
 
+// Handler for SIGTSTP signal, which only works on the parent and toggles
+// foreground-only mode.
 void catchSIGTSTP(int signo) {
     if (noBg) {
         noBg = 0;
@@ -35,7 +38,7 @@ void prompt() {
 
 // Given a string, go through and replace instances of "$$" with the process ID.
 char* expandPids(char* command) {
-    int pid = getpid();
+    int pid = getpid();                        // Pid of current process
     char* pidString = calloc(7, sizeof(char)); // 6 is max length of a pid on os1
     int pidDigits = sprintf(pidString, "%d", pid); // number of digits in the pid
 
@@ -43,28 +46,33 @@ char* expandPids(char* command) {
     readCommand = calloc(strlen(command) + 1, 1);
     strcpy(readCommand, command);
     char* expandedCommand = calloc(strlen(readCommand) + 1, 1); // Final expanded command to be returned
-    char* currString = readCommand; // String left to parse
-    char* pidLocation = strstr(readCommand, "$$");
+    char* currString = readCommand; // Pointer to current token to add to expanded command
+    char* pidLocation = strstr(readCommand, "$$"); // Pointer to next spot to replace $$
+
     if (!pidLocation) {
-        return command;
+        return command; // Exit if no $$'s found
     }
 
+    // Iterate through the string to replace $$'s
     while (pidLocation && currString[0] != '\0') {
         pidLocation[0] = '\0'; // Terminate the current token for strcat'ing currString
         pidLocation[1] = '\0'; // Blank out the next $ too
 
         expandedCommand = realloc(expandedCommand, strlen(expandedCommand) + strlen(currString) + pidDigits + 1);
-        
+
+        // Add current token and the pid to the expanded command
         strcat(expandedCommand, currString);
         strcat(expandedCommand, pidString);
-        
+
         currString = pidLocation + 2;
         pidLocation = strstr(currString, "$$");
     }
+    // Put the end of the command (after the last $$) into the expanded command
     if (currString[0] != '\0') {
         expandedCommand = realloc(expandedCommand, strlen(expandedCommand) + strlen(currString) + 1);
         strcat(expandedCommand, currString);
     }
+
     free(readCommand);
     return expandedCommand;
 }
@@ -79,6 +87,8 @@ int main(int argc, char* argv[]) {
                           // background processes
     int maxBgProc = -1;   // Index of last background process
 
+
+    // I referenced Lecture 3.3: Signals for this
     // Set up signal handlers for parent process
     struct sigaction SIGTSTP_action = {{0}}, ignore_action = {{0}};
 
@@ -88,10 +98,11 @@ int main(int argc, char* argv[]) {
 
     ignore_action.sa_handler = SIG_IGN;
 
-    sigaction(SIGINT, &ignore_action, NULL); // Ignore for parent
-    sigaction(SIGTSTP, &SIGTSTP_action, NULL); // Register to function
+    sigaction(SIGINT, &ignore_action, NULL);   // Ignore SIGINT for parent
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL); // Register SIGTSTP to function
 
     while (1) {
+
         // Check for finished background processes to reap ====================
 
         for (int i = 0; i <= maxBgProc; i++) {
@@ -125,12 +136,13 @@ int main(int argc, char* argv[]) {
         // Don't do anything if empty line (only '\n' entered) or line starts with '#'
         if (strlen(readBuffer) != 1 && readBuffer[0] != '#') {
             expandedCommand = expandPids(readBuffer);
-            // printf("Expanded command: %s\n", expandedCommand); fflush(stdout);
 
             if (strncmp(readBuffer, "exit", 4) == 0) {
+                // Built-in exit command ======================================
+
                 for (int i = 0; i <= maxBgProc; i++) {
                     // If the child process has not terminated, it will be force killed;
-                    // otherwise, will be cleaned up.
+                    // otherwise, it will be cleaned up.
                     if (waitpid(bgProcs[i], &bgProcInfos[i], WNOHANG) == 0) {
                         kill(bgProcs[i], SIGKILL); // Force kill!
                         continue;
@@ -150,16 +162,18 @@ int main(int argc, char* argv[]) {
                     bgProcInfos[i] = bgProcInfos[maxBgProc];
                     maxBgProc--;
                 }
-                exit(0);
+                exit(0); // Exit smallsh!
             }
             else if (strncmp(expandedCommand, "cd", 2) == 0) {
-                int error = 0; // non-zero if chdir was unsuccessful
-                char* arg = expandedCommand + 2; // pointer to spot after "cd", which
-                                            // is ' ' if arguments
+                // Built-in cd command ========================================
+
+                int error = 0;              // non-zero if chdir was unsuccessful
+                char* arg = expandedCommand + 2; // pointer to spot after "cd",
+                                            // which is ' ' if arguments
                                             // were provided and '\n' if not
 
-                if (arg[0] == '\n') { // No arguments provided
-                    // Go to home directory
+                if (arg[0] == '\n') {
+                    // No arguments provided, so go to home directory
                     error = chdir(getenv("HOME"));
                 }
                 else {
@@ -167,22 +181,14 @@ int main(int argc, char* argv[]) {
                     // Replace the '\n' at the end with a '\0' first
                     strtok(++arg, "\n");
                     error = chdir(arg);
-                    // printf("Arg was %s\n", arg); fflush(stdout);
                 }
                 if (error) {
                     perror("cd"); fflush(stdout);
                 }
-                /*
-                // Uncomment for testing:
-                char* buf = NULL;
-                buf = getcwd(buf, 0);
-                printf("Debug: Current working directory = %s\n", buf);
-                    fflush(stdout);
-                perror(NULL); fflush(stdout);
-                free(buf); 
-                // */
             }
             else if (strncmp(readBuffer, "status", 6) == 0) {
+                // Built-in status command ====================================
+
                 if (status == 0 || status == 1) {
                     printf("exit value %d\n", status);
                 }
@@ -191,34 +197,44 @@ int main(int argc, char* argv[]) {
                 }
             }
             else {
-                int bg = 0; // 1 if command should be executed in background
-                int fdIn = 0; // File descriptor to direct input to
+                // External commands ==========================================
+
+                int bg = 0;    // 1 if command should be executed in background
+                int fdIn = 0;  // File descriptor to direct input to
                 int fdOut = 1; // File descriptor to direct output to
 
 
                 // Put arguments into an array for exec() =====================
 
+                // Array of pointers to arguments
                 char** argPtrs = calloc(514, sizeof(char*));
-                int currArg = 0;
-                char* saveptr; // Pointer used by strtok_r() to save its spot
+
+                int currArg = 0; // Index of current slot to store an argument
+                char* saveptr;   // Pointer used by strtok_r() to save its spot
+
+                // Current argument (token) being investigated
                 char* args = strtok_r(expandedCommand, " \n", &saveptr);
+
+                // Iterate through command and add arguments to argPtrs
                 do {
                     argPtrs[currArg] = args;
-                    // printf("currArg = %d; argPtrs[currArg] = %s\n", currArg, argPtrs[currArg]);
                     currArg++;
                     args = strtok_r(NULL, " \n", &saveptr);
                 }
                 while (args);
+
+                // Terminate args array with a NULL pointer
                 argPtrs[currArg] = NULL;
 
 
                 // Determine whether backgrounding needs to happen ============
 
                 if (strcmp(argPtrs[currArg - 1], "&") == 0) {
-                    if (!noBg) {
+                    if (!noBg) { // Do nothing if foreground-only mode is on
                         bg = 1;
                     }
-                    argPtrs[currArg - 1] = NULL; // Terminate args here for exec()
+                    // Terminate args array before the & for exec
+                    argPtrs[currArg - 1] = NULL;
                     currArg--;
                 }
 
@@ -230,25 +246,26 @@ int main(int argc, char* argv[]) {
                 pid_t childPid = -5;
                 int childExitInfo = -5;
 
-
                 childPid = fork();
 
+                // Determine whether we are in the parent or child
                 if (childPid == -1) {
                     perror("Unable to fork"); fflush(stdout);
                     status = 1;
                 }
                 else if (childPid == 0) {
-                    // Child
+                    // In the child ============================================
 
                     
-                    // Determine whether input/output need to be redirected ===
-                    
+                    // Determine whether input/output need to be redirected ====
+
                     // Only look at the last four arguments (not including & if
                     // it was there), because those are the only places possible
                     // to find < or >. Skip the very last argument, which would
                     // be a file name if redirection is to happen. Also stop if
                     // 0 is reached (that's the position of the command itself).
                     for (int i = currArg - 2; i > 0 && i >= currArg - 4; i--) {
+                        // Look for < and open the file specified
                         if (strcmp(argPtrs[i], "<") == 0) {
                             fdIn = open(argPtrs[i+1], O_RDONLY);
                             if (fdIn == -1) {
@@ -262,6 +279,7 @@ int main(int argc, char* argv[]) {
                             // be closed in that process
                             argPtrs[i] = NULL; // truncate arguments list
                         }
+                        // Look for > and open the file specified
                         else if (strcmp(argPtrs[i], ">") == 0) {
                             fdOut = open(argPtrs[i+1],
                                     O_WRONLY | O_CREAT | O_TRUNC, 0640);
@@ -294,34 +312,46 @@ int main(int argc, char* argv[]) {
                             fcntl(fdOut, F_SETFD, FD_CLOEXEC);
                         }
                     }
+
+                    // Do any redirects necessary
                     dup2(fdIn, 0);
                     dup2(fdOut, 1);
 
                     // Create signal handler for SIGINT
                     struct sigaction SIGINT_action = {{0}};
+                    // Set to default action
                     SIGINT_action.sa_handler = SIG_DFL;
 
                     sigfillset(&SIGINT_action.sa_mask);
                     SIGINT_action.sa_flags = SA_RESTART;
 
-                    // Set signal handler for SIGINT for child if foreground
+                    // Set signal handler for SIGINT for child if it's going to
+                    // be executed in the foreground
                     if (!bg) {
                         sigaction(SIGINT, &SIGINT_action, NULL);
                     }
                     // Otherwise it will stay ignored
 
-                    // Ignore SIGTSTP
+                    // Set child to ignore SIGTSTP
                     sigaction(SIGTSTP, &ignore_action, NULL);
 
+                    // Execute external command
                     execvp(expandedCommand, argPtrs);
+
                     // Error out if it gets down here
                     perror("bash"); fflush(stdout);
                     exit(1);
                 }
 
-                // Parent
+
+                // In the parent ===============================================
+
                 if (bg == 0) {
+                    // Do blocking wait for child if it's not a background
+                    // process
                     childPid = waitpid(childPid, &childExitInfo, 0);
+
+                    // Set the exit/termination status
                     if (WIFEXITED(childExitInfo)) {
                         status = WEXITSTATUS(childExitInfo);
                     }
@@ -331,8 +361,10 @@ int main(int argc, char* argv[]) {
                 }
                 else {
                     maxBgProc++;
+                    // Do non-blocking wait for child
                     waitpid(childPid, &bgProcInfos[maxBgProc], WNOHANG);
                     printf("background pid is %d\n", childPid); fflush(stdout);
+                    // Add child to background processes list
                     bgProcs[maxBgProc] = childPid;
                 }
             }
