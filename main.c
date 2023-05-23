@@ -9,20 +9,23 @@
 #include <unistd.h>
 
 int status = 0; // Status value for the status command
+int noBg = 0; // 1 if nothing can be run in the background
 
-void catchSIGINT(int signo) {
-
-    char* message = "^C";
-    write(STDOUT_FILENO, message, 2);
-    /*raise(SIGUSR2);
-    sleep(5);*/
-    exit(0);
-}
-
-// Clean up and exit with the given error status.
-void exitShell() {
-
-    exit(0);
+void catchSIGTSTP(int signo) {
+    if (noBg) {
+        noBg = 0;
+        char* message = "\nExiting foreground-only mode\n";
+        write(STDOUT_FILENO, message, 30);
+        message = ": ";
+        write(STDOUT_FILENO, message, 2);
+    }
+    else {
+        noBg = 1;
+        char* message = "\nEntering foreground-only mode (& is now ignored)\n";
+        write(STDOUT_FILENO, message, 50);
+        message = ": ";
+        write(STDOUT_FILENO, message, 2);
+    }
 }
 
 // Print the ":" prompt.
@@ -76,6 +79,21 @@ int main(int argc, char* argv[]) {
                           // background processes
     int maxBgProc = -1;   // Index of last background process
 
+    // Set up signal handlers for parent process
+    struct sigaction SIGTSTP_action = {{0}}, ignore_action = {{0}};
+
+    SIGTSTP_action.sa_handler = catchSIGTSTP;
+    sigfillset(&SIGTSTP_action.sa_mask);
+    SIGTSTP_action.sa_flags = SA_RESTART;
+
+    ignore_action.sa_handler = SIG_IGN;
+
+    sigaction(SIGINT, &ignore_action, NULL); // Ignore for parent
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL); // Register to function
+    sigaction(SIGTERM, &ignore_action, NULL);
+    sigaction(SIGHUP, &ignore_action, NULL);
+    sigaction(SIGQUIT, &ignore_action, NULL);
+
     while (1) {
         // Check for finished background processes to reap ====================
 
@@ -113,7 +131,8 @@ int main(int argc, char* argv[]) {
             // printf("Expanded command: %s\n", expandedCommand); fflush(stdout);
 
             if (strncmp(readBuffer, "exit", 4) == 0) {
-                exitShell(0);
+
+                exit(0);
             }
             else if (strncmp(expandedCommand, "cd", 2) == 0) {
                 int error = 0; // non-zero if chdir was unsuccessful
@@ -178,7 +197,9 @@ int main(int argc, char* argv[]) {
                 // Determine whether backgrounding needs to happen ============
 
                 if (strcmp(argPtrs[currArg - 1], "&") == 0) {
-                    bg = 1;
+                    if (!noBg) {
+                        bg = 1;
+                    }
                     argPtrs[currArg - 1] = NULL; // Terminate args here for exec()
                     currArg--;
                 }
@@ -257,6 +278,23 @@ int main(int argc, char* argv[]) {
                     }
                     dup2(fdIn, 0);
                     dup2(fdOut, 1);
+
+                    // Create signal handler for SIGINT
+                    struct sigaction SIGINT_action = {{0}};
+                    SIGINT_action.sa_handler = SIG_DFL;
+
+                    sigfillset(&SIGINT_action.sa_mask);
+                    SIGINT_action.sa_flags = SA_RESTART;
+
+                    // Set signal handler for SIGINT for child if foreground
+                    if (!bg) {
+                        sigaction(SIGINT, &SIGINT_action, NULL);
+                    }
+                    // Otherwise it will stay ignored
+
+                    // Ignore SIGTSTP
+                    sigaction(SIGTSTP, &ignore_action, NULL);
+
                     execvp(expandedCommand, argPtrs);
                     // Error out if it gets down here
                     perror("bash"); fflush(stdout);
@@ -279,33 +317,12 @@ int main(int argc, char* argv[]) {
                     printf("background pid is %d\n", childPid); fflush(stdout);
                     bgProcs[maxBgProc] = childPid;
                 }
-
-
-
-
-
-                // */
-                /*
-                struct sigaction SIGINT_action = {0}, ignore_action = {0};
-
-                SIGINT_action.sa_handler = catchSIGINT;
-                sigfillset(&SIGINT_action.sa_mask);
-                SIGINT_action.sa_flags = 0;
-
-                ignore_action.sa_handler = SIG_IGN;
-
-                sigaction(SIGINT, &SIGINT_action, NULL);
-                sigaction(SIGTERM, &ignore_action, NULL);
-                sigaction(SIGHUP, &ignore_action, NULL);
-                sigaction(SIGQUIT, &ignore_action, NULL);
-
-                printf("SIGTERM, SIGHUP, and SIGQUIT are disabled.\n"); fflush();
-                // */
             }
         }
         free(readBuffer);
         readBuffer = NULL;
         len = -1;
     }
+    perror(NULL);
     return 1;  // If it got down here, there was a problem...
 }
